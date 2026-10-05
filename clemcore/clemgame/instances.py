@@ -136,17 +136,18 @@ class GameInstances:
         rows = [row for row in self._rows if condition(row)]
         return GameInstances(self._game_name, rows)
 
-    def find_by_game_id(self, game_id: int | str) -> dict:
+    def find_by_game_id(self, game_id: int | str, experiment_name: str ) -> dict:
         """Returns the row dict for the given game_id or raises ValueError if not found.
 
         Args:
             game_id: The game_id to look up. Coerced to int to handle string values from HTTP callers.
+            experiment_name: The name of the experiment in which the game_id is found. We need it to disambiguate duplicate game_ids occuring in a single instances.json
         """
         game_id = int(game_id)
         for row in self._rows:
-            if int(row["game_instance"]["game_id"]) == game_id:
+            if int(row["game_instance"]["game_id"]) == game_id and row["experiment"]["name"] == experiment_name:
                 return row
-        raise ValueError(f"game_id={game_id!r} not found in game instances for {self._game_name}")
+        raise ValueError(f"game_id={game_id!r} | experiment={experiment_name!r} not found in game instances for {self._game_name}")
 
     @classmethod
     def from_game_spec(cls, game_spec: GameSpec) -> "GameInstances":

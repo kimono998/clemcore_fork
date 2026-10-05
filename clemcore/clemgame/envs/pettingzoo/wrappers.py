@@ -233,15 +233,25 @@ class GameInstanceIteratorWrapper(BaseWrapper):
             self._iter = iter(game_instances)
 
     def reset(self, seed: int | None = None, options: dict | None = None):
-        options = options or {}
+        options = dict(options or {}) # work on a copy so popping doesn't mutate the upstream dict. 
         game_id = options.pop("game_id", None)  # consumed here; not forwarded to the underlying game env
-        if game_id is not None:
-            stdout_logger.info("Reset requested for game_id=%s", game_id)
-            row = self._game_instances.find_by_game_id(game_id)
-        else:
-            row = next(self._iter)
+        experiment_name = (options.get("experiment") or {}).get("name") # safe handle experiment dict
+
+        row = self._select_row(experiment_name, game_id)
         stdout_logger.info("Loading instance: experiment=%s, game_id=%s",
-                           row["experiment"]["name"], row["game_instance"].get("game_id"))
-        options["experiment"] = row["experiment"]
-        options["game_instance"] = row["game_instance"]
-        super().reset(seed=seed, options=options)
+                           row["experiment"]["name"], row["game_instance"]["game_id"])
+
+        super().reset(seed=seed, options={**options,
+                                          "experiment": row["experiment"],
+                                          "game_instance": row["game_instance"]})
+        
+    def _select_row(self, experiment_name: str | None, game_id: int | str | None) -> dict:
+        """Returns the requested row, or the next row of the iterator if nothing was requested."""
+        if experiment_name is None and game_id is None:
+            return next(self._iter) # in gymnasium and petting zoo env.reset() implies starting a new episode
+        
+        if experiment_name is None or game_id is None: # to disambiguate instances where multiple game-ids are shared across experiments
+            raise ValueError("Selecting an instance requires both 'experiment['name']' and 'game_id', "
+                             f"got experiment['name']={experiment_name!r}, game_id={game_id!r}")
+        
+        return self._game_instances.find_by_game_id(game_id, experiment_name)

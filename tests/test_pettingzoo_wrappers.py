@@ -144,6 +144,14 @@ class GameInstanceIteratorWrapperTestCase(unittest.TestCase):
                     {"game_id": 2},
                     {"game_id": 3},
                 ]
+            },
+            {
+                "name": "exp2",
+                "game_instances": [
+                    {"game_id": 1},
+                    {"game_id": 2},
+                    {"game_id": 3},
+                ]
             }]
         }
         self.instances = GameInstances("test_game", to_rows("test_game", instances_data))
@@ -179,24 +187,67 @@ class GameInstanceIteratorWrapperTestCase(unittest.TestCase):
         wrapper.reset()  # cycles back to start
         self.assertEqual(self._last_reset_options()["game_instance"]["game_id"], 1)
 
-    def test_game_id_random_access(self):
-        """reset(options={"game_id": N}) selects the specific episode."""
+    def test_selects_instance_by_experiment_and_game_id(self):
+        """reset(options={"experiment": {"name": ...}, "game_id": N}) selects that exact instance."""
         wrapper = GameInstanceIteratorWrapper(self.mock_env, self.instances)
-        wrapper.reset(options={"game_id": 3})
-        self.assertEqual(self._last_reset_options()["game_instance"]["game_id"], 3)
+        wrapper.reset(options={"experiment": {"name": "exp1"}, "game_id": 3})
+        options = self._last_reset_options()
+        self.assertEqual(options["experiment"]["name"], "exp1")
+        self.assertEqual(options["game_instance"]["game_id"], 3)
 
-    def test_game_id_does_not_advance_iterator(self):
-        """Random access via game_id leaves the iterator position unchanged."""
+    def test_same_game_id_in_other_experiment(self):
+        """A game_id reused across experiments resolves to the requested experiment (the original bug)."""
+        wrapper = GameInstanceIteratorWrapper(self.mock_env, self.instances)
+        wrapper.reset(options={"experiment": {"name": "exp2"}, "game_id": 1})
+        self.assertEqual(self._last_reset_options()["experiment"]["name"], "exp2")
+
+    def test_selection_does_not_advance_iterator(self):
+        """Explicit selection leaves the iterator position unchanged."""
         wrapper = GameInstanceIteratorWrapper(self.mock_env, self.instances, single_pass=True)
-        wrapper.reset(options={"game_id": 3})  # random access, iterator not advanced
-        wrapper.reset()  # should still get first instance from iterator
+        wrapper.reset(options={"experiment": {"name": "exp1"}, "game_id": 3})
+        wrapper.reset()  # should still get the first instance from the iterator
         self.assertEqual(self._last_reset_options()["game_instance"]["game_id"], 1)
 
     def test_game_id_not_forwarded_to_env(self):
         """game_id is consumed by the wrapper and not passed to the underlying env."""
         wrapper = GameInstanceIteratorWrapper(self.mock_env, self.instances)
-        wrapper.reset(options={"game_id": 1})
+        wrapper.reset(options={"experiment": {"name": "exp1"}, "game_id": 1})
         self.assertNotIn("game_id", self._last_reset_options())
+
+    def test_experiment_comes_from_instances_file(self):
+        """The forwarded experiment is the full dict from the instances file, not the caller's partial dict."""
+        instances = GameInstances("test_game", to_rows("test_game", {
+            "experiments": [{"name": "exp1", "max_turns": 3, "game_instances": [{"game_id": 1}]}]
+        }))
+        wrapper = GameInstanceIteratorWrapper(self.mock_env, instances)
+        wrapper.reset(options={"experiment": {"name": "exp1", "max_turns": 99}, "game_id": 1})
+        self.assertEqual(self._last_reset_options()["experiment"]["max_turns"], 3)
+
+    def test_caller_options_not_modified(self):
+        """reset() does not mutate the options dict passed by the caller."""
+        wrapper = GameInstanceIteratorWrapper(self.mock_env, self.instances)
+        options = {"experiment": {"name": "exp1"}, "game_id": 2}
+        wrapper.reset(options=options)
+        self.assertEqual(options, {"experiment": {"name": "exp1"}, "game_id": 2})
+
+    def test_game_id_without_experiment_raises(self):
+        """Selecting by game_id alone is ambiguous and must fail."""
+        wrapper = GameInstanceIteratorWrapper(self.mock_env, self.instances)
+        with self.assertRaises(ValueError):
+            wrapper.reset(options={"game_id": 1})
+
+    def test_experiment_without_game_id_raises(self):
+        """An experiment without a game_id is an incomplete request and must fail (not silently iterate)."""
+        wrapper = GameInstanceIteratorWrapper(self.mock_env, self.instances)
+        with self.assertRaises(ValueError):
+            wrapper.reset(options={"experiment": {"name": "exp1"}})
+
+    def test_unknown_instance_raises(self):
+        """A non-existent (experiment, game_id) pair raises ValueError."""
+        wrapper = GameInstanceIteratorWrapper(self.mock_env, self.instances)
+        with self.assertRaises(ValueError):
+            wrapper.reset(options={"experiment": {"name": "exp2"}, "game_id": 99})
+
 
 
 if __name__ == '__main__':

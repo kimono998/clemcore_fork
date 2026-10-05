@@ -115,7 +115,7 @@ class GameInstancesTestCase(unittest.TestCase):
         rows = to_rows("test_game", self.get_sample_instances())
         instances = GameInstances("test_game", rows)
 
-        row = instances.find_by_game_id(2)
+        row = instances.find_by_game_id(2, 'experiment_1')
         self.assertEqual(row["game_instance"]["game_id"], 2)
         self.assertEqual(row["experiment"]["name"], "experiment_1")
 
@@ -124,7 +124,7 @@ class GameInstancesTestCase(unittest.TestCase):
         rows = to_rows("test_game", self.get_sample_instances())
         instances = GameInstances("test_game", rows)
 
-        row = instances.find_by_game_id("2")
+        row = instances.find_by_game_id("2", 'experiment_1')
         self.assertEqual(row["game_instance"]["game_id"], 2)
 
     def test_find_by_game_id_not_found(self):
@@ -133,7 +133,16 @@ class GameInstancesTestCase(unittest.TestCase):
         instances = GameInstances("test_game", rows)
 
         with self.assertRaises(ValueError):
-            instances.find_by_game_id(999)
+            instances.find_by_game_id(999, 'experiment_1')
+
+    def test_find_by_game_id_wrong_experiment(self):
+        """Test that an existing game_id is not found in an experiment that does not contain it."""
+        rows = to_rows("test_game", self.get_sample_instances())
+        instances = GameInstances("test_game", rows)
+
+        with self.assertRaises(ValueError):
+            instances.find_by_game_id(2, "experiment_2")  # id 2 exists only in experiment_1
+
 
     def test_from_file(self):
         """Test loading instances from file."""
