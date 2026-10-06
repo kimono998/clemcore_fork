@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clemcore"
-version = "3.7.2"
+version = "3.7.3"
 description = "The cLLM (chat-optimized Large Language Model, 'clem') framework tests such models' ability to engage in games, that is, rule-constituted activities played using language."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -31,7 +31,7 @@ dependencies = [
     "ordered-set>=4.1.0,<5.0.0", # transcripts
     "markdown>=3.8.0,<4.0.0", # transcripts
     "pettingzoo>=1.25.0,<2.0.0", # to wrap games as pettingzoo or gymnasium environments
-    "openenv-core~=0.2.1", # to serve games as openenv server
+    "openenv>=0.7,<0.8", # to serve games as openenv server
     "datasets>=4.4.0,<5.0.0" # to load playpen-data for openenv server
 ]
 
