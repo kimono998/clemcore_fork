@@ -1,12 +1,14 @@
 import logging
 import threading
-from typing import Callable, Dict, Any
+from typing import Callable, Dict, Any, Optional
 
 from openenv.core import Environment
 
 from clemcore.clemgame.callbacks.base import GameBenchmarkCallbackList
 from clemcore.clemgame.envs.openenv.models import ClemGameState, ClemGameObservation, ClemGameAction
+from clemcore.clemgame.envs.openenv.server.task_provider import ClemGameTaskProvider
 from clemcore.clemgame.envs.pettingzoo import gym_env
+from clemcore.clemgame.instances import GameInstances
 from clemcore.clemgame.master import GameState
 
 module_logger = logging.getLogger(__name__)
@@ -16,7 +18,7 @@ module_logger = logging.getLogger(__name__)
 _game_load_lock = threading.Lock()
 
 
-class ClemGameEnvironment(Environment):
+class ClemGameEnvironment(ClemGameTaskProvider, Environment):
     # Required for max_concurrent_envs > 1; each session gets its own instance via
     # the factory in app.py, so there is no shared mutable state across sessions — see ADR-0001.
     SUPPORTS_CONCURRENT_SESSIONS = True
@@ -28,6 +30,7 @@ class ClemGameEnvironment(Environment):
                  single_pass: bool = False,
                  learner_agent: str = "player_0",
                  env_agents: Dict[str, Any] = None,
+                 game_instances: Optional[GameInstances] = None,
                  callbacks: GameBenchmarkCallbackList = None,
                  reward_func: Callable[[dict, str, GameState, dict], float] = None,
                  feedback_func: Callable[[dict, str, GameState, dict], str | None] = None
@@ -38,6 +41,7 @@ class ClemGameEnvironment(Environment):
                            game_name, learner_agent, env_agents)
         self._game_name = game_name
         self._state = ClemGameState(game_name=game_name, episode_id="episode_0", step_count=0, episode_count=0)
+        self._game_instances = game_instances
         with _game_load_lock:
             self._game_env = gym_env(game_name,
                                      instances_filter=instances_filter,
@@ -55,6 +59,14 @@ class ClemGameEnvironment(Environment):
             self._game_env.close()
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> ClemGameObservation:
+        # Translate OpenEnv standard split/index kwargs to clem's experiment/game_id format
+        if "split" in kwargs or "index" in kwargs:
+            split = kwargs.pop("split", None)
+            index = kwargs.pop("index", None)
+            if split is not None:
+                kwargs["experiment"] = {"name": split}
+            if index is not None:
+                kwargs["game_id"] = index
         if episode_id is not None:
             kwargs["episode_id"] = episode_id
         options = kwargs if kwargs else None

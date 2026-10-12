@@ -4,6 +4,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 import uvicorn
 
@@ -12,9 +13,17 @@ from clemcore.clemgame.envs.openenv.client import ClemGameEnv
 from clemcore.clemgame.envs.openenv.models import ClemGameAction
 from clemcore.clemgame.envs.openenv.server.app import create_clemv_app
 from clemcore.clemgame.envs.openenv.server.environment import ClemGameEnvironment
+from clemcore.clemgame.instances import GameInstances
 
 APP_MODULE = "clemcore.clemgame.envs.openenv.server.app"
 ENVIRONMENT_MODULE = "clemcore.clemgame.envs.openenv.server.environment"
+
+FAKE_PROVIDER_ROWS = [
+    {"game_name": "fake_game", "experiment": {"name": "high_frequency_words"}, "game_instance": {"game_id": 0}},
+    {"game_name": "fake_game", "experiment": {"name": "high_frequency_words"}, "game_instance": {"game_id": 1}},
+    {"game_name": "fake_game", "experiment": {"name": "high_frequency_words"}, "game_instance": {"game_id": 2}},
+    {"game_name": "fake_game", "experiment": {"name": "low_frequency_words"}, "game_instance": {"game_id": 0}},
+]
 
 
 class FakeGameEnv:
@@ -55,8 +64,8 @@ class Fake2PlayerGame:
         pass
 
 
-def patch_game_env():
-    """Replaces game loading with FakeGameEnv, so no clembench games are needed."""
+def patch_game_env(game_instances=None):
+    """Replaces game loading with FakeGameEnv and optionally injects fake game instances."""
     game_spec = MagicMock()
     game_spec.is_multi_player.return_value = False
     registry = MagicMock()
@@ -67,9 +76,14 @@ def patch_game_env():
         created.append(FakeGameEnv())
         return created[-1]
 
+    fake_instances = game_instances if game_instances is not None else GameInstances("fake_game", [])
+    instances_cls_mock = MagicMock()
+    instances_cls_mock.from_game_spec.return_value = fake_instances
+
     patches = [
         patch(f"{APP_MODULE}.GameRegistry", registry),
         patch(f"{APP_MODULE}.check_agent_mapping_for_training"),
+        patch(f"{APP_MODULE}.GameInstances", instances_cls_mock),
         patch(f"{ENVIRONMENT_MODULE}.gym_env", side_effect=make_fake_env),
     ]
     return patches, created
@@ -87,10 +101,14 @@ def patch_2player_game_env():
         created.append(Fake2PlayerGame())
         return created[-1]
 
+    instances_cls_mock = MagicMock()
+    instances_cls_mock.from_game_spec.return_value = GameInstances("fake_game_2p", [])
+
     patches = [
         patch(f"{APP_MODULE}.GameRegistry", registry),
         patch(f"{APP_MODULE}.check_agent_mapping_for_training"),
         patch(f"{APP_MODULE}.load_models", return_value=[MagicMock()]),
+        patch(f"{APP_MODULE}.GameInstances", instances_cls_mock),
         patch(f"{ENVIRONMENT_MODULE}.gym_env", side_effect=make_fake_env),
     ]
     return patches, created
@@ -171,6 +189,24 @@ class ClemGameEnvironmentTestCase(unittest.TestCase):
         self.assertEqual(self.env.state.episode_count, 2)
         self.assertEqual(self.env.state.game_name, "fake_game")
 
+    def test_reset_translates_split_and_index_to_clem_format(self):
+        self.env.reset(split="high_frequency_words", index=3)
+        options = self.game_env.reset_calls[-1]["options"]
+        self.assertEqual(options["experiment"], {"name": "high_frequency_words"})
+        self.assertEqual(options["game_id"], 3)
+
+    def test_reset_split_without_index_still_works(self):
+        self.env.reset(split="train")
+        options = self.game_env.reset_calls[-1]["options"]
+        self.assertEqual(options["experiment"], {"name": "train"})
+        self.assertNotIn("game_id", options)
+
+    def test_reset_index_without_split_still_works(self):
+        self.env.reset(index=5)
+        options = self.game_env.reset_calls[-1]["options"]
+        self.assertEqual(options["game_id"], 5)
+        self.assertNotIn("experiment", options)
+
 
 class OpenEnvServerClientTestCase(unittest.TestCase):
     """Round trips through the real OpenEnv server and client, with a fake game."""
@@ -230,6 +266,51 @@ class OpenEnvServerClientTestCase(unittest.TestCase):
             env.reset()
             state = env.state()
         self.assertEqual(state.game_name, "fake_game")
+
+
+class TaskProviderServerTestCase(unittest.TestCase):
+    """HTTP task-discovery routes return data from the game instances."""
+
+    @classmethod
+    def setUpClass(cls):
+        fake_instances = GameInstances("fake_game", FAKE_PROVIDER_ROWS)
+        cls.patches, cls.created = patch_game_env(game_instances=fake_instances)
+        for p in cls.patches:
+            p.start()
+        app = create_clemv_app("fake_game", learner_agent="player_0", callbacks=GameBenchmarkCallbackList())
+        cls.server = ServerThread(app)
+        cls.server.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.stop()
+        for p in cls.patches:
+            p.stop()
+
+    def test_splits_endpoint_returns_experiment_names(self):
+        resp = httpx.get(f"http://localhost:{self.server.port}/clem_env/splits")
+        self.assertEqual(resp.status_code, 200)
+        names = [s["name"] for s in resp.json()]
+        self.assertIn("high_frequency_words", names)
+        self.assertIn("low_frequency_words", names)
+
+    def test_num_tasks_endpoint_returns_instance_count(self):
+        resp = httpx.post(
+            f"http://localhost:{self.server.port}/clem_env/num_tasks",
+            json={"split": "high_frequency_words"}
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json()["num_tasks"], 3)
+
+    def test_get_task_endpoint_returns_experiment_and_game_id(self):
+        resp = httpx.post(
+            f"http://localhost:{self.server.port}/clem_env/task",
+            json={"split": "high_frequency_words", "index": 1}
+        )
+        self.assertEqual(resp.status_code, 200)
+        task = resp.json()["task"]
+        self.assertEqual(task["experiment"]["name"], "high_frequency_words")
+        self.assertEqual(task["game_id"], 1)
 
 
 class ConcurrentSessionsTestCase(unittest.TestCase):

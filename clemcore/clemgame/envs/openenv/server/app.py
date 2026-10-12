@@ -14,7 +14,7 @@ from clemcore.clemgame.envs.openenv.server.environment import ClemGameEnvironmen
 from clemcore.clemgame.envs.pettingzoo import check_agent_mapping_for_training
 from clemcore.clemgame.master import GameState
 from clemcore.clemgame.registry import GameRegistry
-from clemcore.clemgame.instances import to_instance_filter
+from clemcore.clemgame.instances import GameInstances, to_instance_filter
 
 CLEMV_GAME = os.getenv("CLEMV_GAME")
 CLEMV_GAME_SPLIT = os.getenv("CLEMV_GAME_SPLIT")
@@ -54,6 +54,7 @@ def create_clemv_app(
     # One-time expensive setup shared across all sessions
     game_spec = GameRegistry.from_directories_and_cwd_files().get_game_spec(game_name)
     check_agent_mapping_for_training(game_spec, {learner_agent: "learner", **(env_agents or {})})
+    game_instances = GameInstances.from_game_spec(game_spec)
 
     instances_filter = None
     if game_instance_split:
@@ -85,6 +86,7 @@ def create_clemv_app(
             single_pass=single_pass,
             learner_agent=learner_agent,
             env_agents=env_agent_models,
+            game_instances=game_instances,
             callbacks=session_callbacks,
             reward_func=reward_func,
             feedback_func=feedback_func
