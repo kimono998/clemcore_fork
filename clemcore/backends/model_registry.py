@@ -1,7 +1,9 @@
 import abc
+import functools
 import hashlib
 import json
 import logging
+import threading
 from dataclasses import dataclass
 from operator import itemgetter
 from pathlib import Path
@@ -412,6 +414,17 @@ class Model(abc.ABC):
         assert hasattr(model_spec, "model_name"), "The passed ModelSpec must have a `model_name` attribute"
         self.model_spec = model_spec
         self.__gen_args = dict()
+        # Serialize concurrent generate_response calls so that multiple session threads
+        # sharing one model instance produce correct, non-interleaved results (ADR-0001).
+        _lock = threading.Lock()
+        _original = self.generate_response
+
+        @functools.wraps(_original)
+        def _thread_safe_generate(messages):
+            with _lock:
+                return _original(messages)
+
+        self.generate_response = _thread_safe_generate
 
     def __str__(self):
         """Human-readable descriptor of this model."""

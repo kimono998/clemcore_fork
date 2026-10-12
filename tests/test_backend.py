@@ -1,8 +1,11 @@
+import threading
+import time
 import unittest
 
 import pytest
 
 from clemcore.backends import ModelRegistry, ModelSpec
+from clemcore.backends.model_registry import Model
 from clemcore.backends.anthropic_api import Anthropic
 from clemcore.backends.cohere_api import Cohere
 from clemcore.backends.google_api import Google
@@ -226,6 +229,50 @@ class ModelTestCase(unittest.TestCase):
         model_registry = ModelRegistry().register_from_list(MODELS_LIST)
         model_spec = model_registry.get_first_model_spec_that_unify_with(dict(model_name="model1", backend="openai"))
         assert model_spec.backend == "openai"
+
+
+class ModelThreadSafetyTestCase(unittest.TestCase):
+
+    def test_concurrent_generate_response_returns_correct_results(self):
+        """Two threads calling generate_response on the same model instance simultaneously
+        must each receive the response that corresponds to their own input."""
+
+        class StatefulEchoModel(Model):
+            def __init__(self):
+                super().__init__(ModelSpec(model_name="test-stateful-echo"))
+                self.set_gen_args(temperature=0.0, max_tokens=10)
+                self._current_input = None
+
+            def generate_response(self, messages):
+                # Write to shared state, pause, then read back.
+                # Without a lock another thread overwrites _current_input between
+                # the write and the read, causing the wrong value to be returned.
+                self._current_input = messages[-1]["content"]
+                time.sleep(0.05)
+                return {}, {}, self._current_input
+
+        model = StatefulEchoModel()
+        results = {}
+        errors = []
+
+        def call_model(key, content):
+            try:
+                _, _, response = model.generate_response([{"role": "user", "content": content}])
+                results[key] = response
+            except Exception as exc:
+                errors.append(exc)
+
+        t1 = threading.Thread(target=call_model, args=("a", "hello"))
+        t2 = threading.Thread(target=call_model, args=("b", "world"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+
+        self.assertFalse(errors, errors)
+        self.assertEqual(results["a"], "hello")
+        self.assertEqual(results["b"], "world")
 
 
 if __name__ == '__main__':
