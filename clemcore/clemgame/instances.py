@@ -106,11 +106,14 @@ class GameInstances:
         assert rows is not None, "Instances must be given as 'rows'"
         self._game_name = game_name
         self._rows: list[dict] = rows
-        self._experiment_names = list({row["experiment"]["name"] for row in rows})
+        self._experiment_names = sorted({row["experiment"]["name"] for row in rows})
 
     @property
     def experiment_names(self) -> list:
         return self._experiment_names
+
+    def count_by_experiment(self, name: str) -> int:
+        return sum(1 for row in self._rows if row["experiment"]["name"] == name)
 
     def __iter__(self):
         return iter(self._rows)

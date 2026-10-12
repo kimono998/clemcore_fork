@@ -17,19 +17,22 @@ class ClemGameTaskProvider:
 
     _game_instances: Optional[GameInstances]
 
+    @staticmethod
+    def _task_dict(split: str, index: int) -> dict:
+        return {"experiment": {"name": split}, "game_id": index}
+
     def list_splits(self) -> list:
         if not self._game_instances:
             return []
-        return sorted(self._game_instances.experiment_names)
+        return self._game_instances.experiment_names
 
     def list_tasks(self, split: str) -> list:
-        n = self.num_tasks(split)
-        return [{"experiment": {"name": split}, "game_id": i} for i in range(n)]
+        return [self._task_dict(split, i) for i in range(self.num_tasks(split))]
 
     def num_tasks(self, split: str) -> int:
         if not self._game_instances:
             return 0
-        return len(self._game_instances.filter(lambda r: r["experiment"]["name"] == split))
+        return self._game_instances.count_by_experiment(split)
 
     def get_task(self, split: str, index: int) -> dict:
         n = self.num_tasks(split)
@@ -37,9 +40,8 @@ class ClemGameTaskProvider:
             raise IndexError(
                 f"task index {index} out of range for split {split!r} with {n} tasks"
             )
-        return {"experiment": {"name": split}, "game_id": index}
+        return self._task_dict(split, index)
 
     def get_task_range(self, split: str, start: int = None, stop: int = None) -> list:
         n = self.num_tasks(split)
-        return [{"experiment": {"name": split}, "game_id": i}
-                for i in range(*slice(start, stop).indices(n))]
+        return [self._task_dict(split, i) for i in range(*slice(start, stop).indices(n))]
