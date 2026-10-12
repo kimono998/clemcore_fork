@@ -13,11 +13,31 @@ from clemcore.clemgame.envs.openenv.models import ClemGameAction
 from clemcore.clemgame.envs.openenv.server.app import create_clemv_app
 from clemcore.clemgame.envs.openenv.server.environment import ClemGameEnvironment
 
+APP_MODULE = "clemcore.clemgame.envs.openenv.server.app"
 ENVIRONMENT_MODULE = "clemcore.clemgame.envs.openenv.server.environment"
 
 
 class FakeGameEnv:
     """Stands in for gym_env: echoes actions and ends the episode on 'stop'."""
+
+    def __init__(self):
+        self.reset_calls = []
+
+    def reset(self, seed=None, options=None):
+        self.reset_calls.append(dict(seed=seed, options=options))
+        return {"role": "user", "content": "start"}, {}
+
+    def step(self, action):
+        done = action == "stop"
+        observation = {"role": "user", "content": f"echo {action}"}
+        return observation, 1.0 if done else 0.0, done, False, {"turn_feedback": "feedback"}
+
+    def close(self):
+        pass
+
+
+class Fake2PlayerGame:
+    """Stands in for gym_env in a two-player game: same reset/step interface as FakeGameEnv."""
 
     def __init__(self):
         self.reset_calls = []
@@ -48,8 +68,29 @@ def patch_game_env():
         return created[-1]
 
     patches = [
-        patch(f"{ENVIRONMENT_MODULE}.GameRegistry", registry),
-        patch(f"{ENVIRONMENT_MODULE}.check_agent_mapping_for_training"),
+        patch(f"{APP_MODULE}.GameRegistry", registry),
+        patch(f"{APP_MODULE}.check_agent_mapping_for_training"),
+        patch(f"{ENVIRONMENT_MODULE}.gym_env", side_effect=make_fake_env),
+    ]
+    return patches, created
+
+
+def patch_2player_game_env():
+    """Replaces game loading with Fake2PlayerGame and mocks model loading."""
+    game_spec = MagicMock()
+    game_spec.is_multi_player.return_value = True
+    registry = MagicMock()
+    registry.from_directories_and_cwd_files.return_value.get_game_spec.return_value = game_spec
+    created = []
+
+    def make_fake_env(*args, **kwargs):
+        created.append(Fake2PlayerGame())
+        return created[-1]
+
+    patches = [
+        patch(f"{APP_MODULE}.GameRegistry", registry),
+        patch(f"{APP_MODULE}.check_agent_mapping_for_training"),
+        patch(f"{APP_MODULE}.load_models", return_value=[MagicMock()]),
         patch(f"{ENVIRONMENT_MODULE}.gym_env", side_effect=make_fake_env),
     ]
     return patches, created
@@ -177,11 +218,115 @@ class OpenEnvServerClientTestCase(unittest.TestCase):
             result = env.step(ClemGameAction(response="hello"))
         self.assertEqual(result.observation.metadata, {"turn_feedback": "feedback", "truncated": False})
 
+    def test_step_result_metadata_is_populated(self):
+        with self.server.client() as env:
+            env.reset()
+            result = env.step(ClemGameAction(response="hello"))
+        self.assertIsNotNone(result.metadata)
+        self.assertEqual(result.metadata, {"turn_feedback": "feedback", "truncated": False})
+
     def test_state_reaches_client(self):
         with self.server.client() as env:
             env.reset()
             state = env.state()
         self.assertEqual(state.game_name, "fake_game")
+
+
+class ConcurrentSessionsTestCase(unittest.TestCase):
+    """Proves that two 1-player sessions run simultaneously without blocking or corrupting each other."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.patches, cls.created = patch_game_env()
+        for p in cls.patches:
+            p.start()
+        app = create_clemv_app("fake_game", learner_agent="player_0", callbacks=GameBenchmarkCallbackList())
+        cls.server = ServerThread(app)
+        cls.server.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.stop()
+        for p in cls.patches:
+            p.stop()
+
+    def test_two_sessions_run_concurrently(self):
+        """Two clients must hold sessions simultaneously (SUPPORTS_CONCURRENT_SESSIONS + max_concurrent_envs > 1)."""
+        barrier = threading.Barrier(2)
+        results = {}
+        errors = []
+
+        def run_session(key):
+            try:
+                with self.server.client() as env:
+                    env.reset()
+                    barrier.wait(timeout=5)
+                    result = env.step(ClemGameAction(response="hello"))
+                    results[key] = result.observation.context["content"]
+            except Exception as e:
+                errors.append((key, e))
+
+        t1 = threading.Thread(target=run_session, args=("a",))
+        t2 = threading.Thread(target=run_session, args=("b",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertFalse(errors, f"Session errors: {errors}")
+        self.assertEqual(results.get("a"), "echo hello")
+        self.assertEqual(results.get("b"), "echo hello")
+
+
+class Concurrent2PlayerSessionsTestCase(unittest.TestCase):
+    """Proves that two 2-player sessions run simultaneously without blocking or corrupting each other."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.patches, cls.created = patch_2player_game_env()
+        for p in cls.patches:
+            p.start()
+        app = create_clemv_app(
+            "fake_game_2p",
+            learner_agent="player_0",
+            env_agents={"player_1": "mock-model"},
+            callbacks=GameBenchmarkCallbackList()
+        )
+        cls.server = ServerThread(app)
+        cls.server.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.stop()
+        for p in cls.patches:
+            p.stop()
+
+    def test_two_2player_sessions_run_concurrently(self):
+        """Two clients in 2-player games must hold sessions simultaneously."""
+        barrier = threading.Barrier(2)
+        results = {}
+        errors = []
+
+        def run_session(key):
+            try:
+                with self.server.client() as env:
+                    env.reset()
+                    barrier.wait(timeout=5)
+                    result = env.step(ClemGameAction(response="hello"))
+                    results[key] = result.observation.context["content"]
+            except Exception as e:
+                errors.append((key, e))
+
+        t1 = threading.Thread(target=run_session, args=("a",))
+        t2 = threading.Thread(target=run_session, args=("b",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        self.assertFalse(errors, f"Session errors: {errors}")
+        self.assertEqual(results.get("a"), "echo hello")
+        self.assertEqual(results.get("b"), "echo hello")
 
 
 @pytest.mark.clembench
