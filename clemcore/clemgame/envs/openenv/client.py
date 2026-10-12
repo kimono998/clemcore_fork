@@ -22,7 +22,8 @@ class ClemGameEnv(EnvClient[ClemGameAction, ClemGameObservation, ClemGameState])
         return StepResult(
             observation=observation,  # this is only context
             reward=payload["reward"],
-            done=payload["done"]
+            done=payload["done"],
+            metadata=payload.get("metadata"),
         )
 
     def _parse_state(self, payload: dict) -> ClemGameState:
