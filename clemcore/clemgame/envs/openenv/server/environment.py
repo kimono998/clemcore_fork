@@ -60,13 +60,12 @@ class ClemGameEnvironment(ClemGameTaskProvider, Environment):
 
     def reset(self, seed=None, episode_id=None, **kwargs) -> ClemGameObservation:
         # Translate OpenEnv standard split/index kwargs to clem's experiment/game_id format
-        if "split" in kwargs or "index" in kwargs:
-            split = kwargs.pop("split", None)
-            index = kwargs.pop("index", None)
-            if split is not None:
-                kwargs["experiment"] = {"name": split}
-            if index is not None:
-                kwargs["game_id"] = index
+        split = kwargs.pop("split", None)
+        index = kwargs.pop("index", None)
+        if split is not None:
+            kwargs["experiment"] = {"name": split}
+        if index is not None:
+            kwargs["game_id"] = index
         if episode_id is not None:
             kwargs["episode_id"] = episode_id
         options = kwargs if kwargs else None

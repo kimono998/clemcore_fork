@@ -20,15 +20,16 @@ class ClemGameTaskProvider:
     def list_splits(self) -> list:
         if not self._game_instances:
             return []
-        return sorted({row["experiment"]["name"] for row in self._game_instances})
+        return sorted(self._game_instances.experiment_names)
 
     def list_tasks(self, split: str) -> list:
-        return [self.get_task(split, i) for i in range(self.num_tasks(split))]
+        n = self.num_tasks(split)
+        return [{"experiment": {"name": split}, "game_id": i} for i in range(n)]
 
     def num_tasks(self, split: str) -> int:
         if not self._game_instances:
             return 0
-        return sum(1 for row in self._game_instances if row["experiment"]["name"] == split)
+        return len(self._game_instances.filter(lambda r: r["experiment"]["name"] == split))
 
     def get_task(self, split: str, index: int) -> dict:
         n = self.num_tasks(split)
@@ -40,4 +41,5 @@ class ClemGameTaskProvider:
 
     def get_task_range(self, split: str, start: int = None, stop: int = None) -> list:
         n = self.num_tasks(split)
-        return [self.get_task(split, i) for i in range(*slice(start, stop).indices(n))]
+        return [{"experiment": {"name": split}, "game_id": i}
+                for i in range(*slice(start, stop).indices(n))]

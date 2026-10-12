@@ -45,35 +45,11 @@ class FakeGameEnv:
         pass
 
 
-def patch_game_env(game_instances=None):
-    """Replaces game loading with FakeGameEnv and optionally injects fake game instances."""
+def patch_game_env(game_instances=None, multiplayer=False):
+    """Replaces game loading with FakeGameEnv; set multiplayer=True to also mock load_models."""
+    game_name = "fake_game_2p" if multiplayer else "fake_game"
     game_spec = MagicMock()
-    game_spec.is_multi_player.return_value = False
-    registry = MagicMock()
-    registry.from_directories_and_cwd_files.return_value.get_game_spec.return_value = game_spec
-    created = []
-
-    def make_fake_env(*args, **kwargs):
-        created.append(FakeGameEnv())
-        return created[-1]
-
-    fake_instances = game_instances if game_instances is not None else GameInstances("fake_game", [])
-    instances_cls_mock = MagicMock()
-    instances_cls_mock.from_game_spec.return_value = fake_instances
-
-    patches = [
-        patch(f"{APP_MODULE}.GameRegistry", registry),
-        patch(f"{APP_MODULE}.check_agent_mapping_for_training"),
-        patch(f"{APP_MODULE}.GameInstances", instances_cls_mock),
-        patch(f"{ENVIRONMENT_MODULE}.gym_env", side_effect=make_fake_env),
-    ]
-    return patches, created
-
-
-def patch_2player_game_env():
-    """Replaces game loading with FakeGameEnv and mocks model loading."""
-    game_spec = MagicMock()
-    game_spec.is_multi_player.return_value = True
+    game_spec.is_multi_player.return_value = multiplayer
     registry = MagicMock()
     registry.from_directories_and_cwd_files.return_value.get_game_spec.return_value = game_spec
     created = []
@@ -83,15 +59,18 @@ def patch_2player_game_env():
         return created[-1]
 
     instances_cls_mock = MagicMock()
-    instances_cls_mock.from_game_spec.return_value = GameInstances("fake_game_2p", [])
+    instances_cls_mock.from_game_spec.return_value = (
+        game_instances if game_instances is not None else GameInstances(game_name, [])
+    )
 
     patches = [
         patch(f"{APP_MODULE}.GameRegistry", registry),
         patch(f"{APP_MODULE}.check_agent_mapping_for_training"),
-        patch(f"{APP_MODULE}.load_models", return_value=[MagicMock()]),
         patch(f"{APP_MODULE}.GameInstances", instances_cls_mock),
         patch(f"{ENVIRONMENT_MODULE}.gym_env", side_effect=make_fake_env),
     ]
+    if multiplayer:
+        patches.append(patch(f"{APP_MODULE}.load_models", return_value=[MagicMock()]))
     return patches, created
 
 
@@ -351,7 +330,7 @@ class Concurrent2PlayerSessionsTestCase(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.patches, cls.created = patch_2player_game_env()
+        cls.patches, cls.created = patch_game_env(multiplayer=True)
         for p in cls.patches:
             p.start()
         app = create_clemv_app(

@@ -108,6 +108,10 @@ class GameInstances:
         self._rows: list[dict] = rows
         self._experiment_names = list({row["experiment"]["name"] for row in rows})
 
+    @property
+    def experiment_names(self) -> list:
+        return self._experiment_names
+
     def __iter__(self):
         return iter(self._rows)
 
