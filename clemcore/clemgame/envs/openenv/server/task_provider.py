@@ -18,8 +18,13 @@ class ClemGameTaskProvider:
     _game_instances: Optional[GameInstances]
 
     @staticmethod
-    def _task_dict(split: str, index: int) -> dict:
-        return {"experiment": {"name": split}, "game_id": index}
+    def _task_dict(split: str, game_id) -> dict:
+        return {"experiment": {"name": split}, "game_id": game_id}
+
+    def _rows_for_split(self, split: str) -> list:
+        if not self._game_instances:
+            return []
+        return [r for r in self._game_instances if r["experiment"]["name"] == split]
 
     def list_splits(self) -> list:
         if not self._game_instances:
@@ -27,21 +32,21 @@ class ClemGameTaskProvider:
         return self._game_instances.experiment_names
 
     def list_tasks(self, split: str) -> list:
-        return [self._task_dict(split, i) for i in range(self.num_tasks(split))]
+        return [self._task_dict(split, r["game_instance"]["game_id"])
+                for r in self._rows_for_split(split)]
 
     def num_tasks(self, split: str) -> int:
-        if not self._game_instances:
-            return 0
-        return self._game_instances.count_by_experiment(split)
+        return self._game_instances.count_by_experiment(split) if self._game_instances else 0
 
     def get_task(self, split: str, index: int) -> dict:
-        n = self.num_tasks(split)
-        if not (0 <= index < n):
+        rows = self._rows_for_split(split)
+        if not (0 <= index < len(rows)):
             raise IndexError(
-                f"task index {index} out of range for split {split!r} with {n} tasks"
+                f"task index {index} out of range for split {split!r} with {len(rows)} tasks"
             )
-        return self._task_dict(split, index)
+        return self._task_dict(split, rows[index]["game_instance"]["game_id"])
 
     def get_task_range(self, split: str, start: int = None, stop: int = None) -> list:
-        n = self.num_tasks(split)
-        return [self._task_dict(split, i) for i in range(*slice(start, stop).indices(n))]
+        rows = self._rows_for_split(split)
+        return [self._task_dict(split, rows[i]["game_instance"]["game_id"])
+                for i in range(*slice(start, stop).indices(len(rows)))]

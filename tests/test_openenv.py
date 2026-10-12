@@ -167,6 +167,21 @@ class ClemGameEnvironmentTestCase(unittest.TestCase):
         self.assertEqual(options["game_id"], 5)
         self.assertNotIn("experiment", options)
 
+    def test_reset_resolves_index_to_actual_game_id_when_instances_available(self):
+        """Positional index must map to the stored game_id, not the index itself."""
+        instances = GameInstances("fake_game", [
+            {"game_name": "fake_game", "experiment": {"name": "train"},
+             "game_instance": {"game_id": 10}},
+            {"game_name": "fake_game", "experiment": {"name": "train"},
+             "game_instance": {"game_id": 20}},
+        ])
+        env = ClemGameEnvironment("fake_game", game_instances=instances)
+        env._game_env = self.game_env  # reuse the already-created fake
+        env.reset(split="train", index=0)
+        self.assertEqual(self.game_env.reset_calls[-1]["options"]["game_id"], 10)
+        env.reset(split="train", index=1)
+        self.assertEqual(self.game_env.reset_calls[-1]["options"]["game_id"], 20)
+
 
 class OpenEnvServerClientTestCase(unittest.TestCase):
     """Round trips through the real OpenEnv server and client, with a fake game."""

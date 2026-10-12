@@ -11,6 +11,13 @@ FAKE_ROWS = [
     {"game_name": "g", "experiment": {"name": "test"}, "game_instance": {"game_id": 1}},
 ]
 
+# Rows whose game_ids start at 1 (like wordle) — positional index != game_id.
+FAKE_ROWS_1BASED = [
+    {"game_name": "g", "experiment": {"name": "train"}, "game_instance": {"game_id": 1}},
+    {"game_name": "g", "experiment": {"name": "train"}, "game_instance": {"game_id": 2}},
+    {"game_name": "g", "experiment": {"name": "train"}, "game_instance": {"game_id": 3}},
+]
+
 
 class StandaloneProvider(ClemGameTaskProvider):
     """Minimal concrete class for unit-testing the mixin in isolation."""
@@ -69,10 +76,10 @@ class GetTaskTestCase(unittest.TestCase):
         task = self.provider.get_task("train", 2)
         self.assertEqual(task["game_id"], 2)
 
-    def test_index_equals_game_id(self):
+    def test_returns_actual_game_id_from_row(self):
         for i in range(3):
             task = self.provider.get_task("train", i)
-            self.assertEqual(task["game_id"], i)
+            self.assertEqual(task["game_id"], i)  # FAKE_ROWS uses 0-based game_ids
 
     def test_raises_index_error_on_negative(self):
         with self.assertRaises(IndexError):
@@ -134,6 +141,26 @@ class ListTasksTestCase(unittest.TestCase):
         for i, task in enumerate(self.provider.list_tasks("train")):
             self.assertEqual(task["experiment"]["name"], "train")
             self.assertEqual(task["game_id"], i)
+
+
+class NonZeroGameIdTestCase(unittest.TestCase):
+    """Regression: game_ids don't have to start at 0 (e.g. wordle uses 1-based ids)."""
+
+    def setUp(self):
+        self.provider = StandaloneProvider(GameInstances("g", FAKE_ROWS_1BASED))
+
+    def test_get_task_returns_row_game_id_not_positional_index(self):
+        self.assertEqual(self.provider.get_task("train", 0)["game_id"], 1)
+        self.assertEqual(self.provider.get_task("train", 1)["game_id"], 2)
+        self.assertEqual(self.provider.get_task("train", 2)["game_id"], 3)
+
+    def test_list_tasks_returns_actual_game_ids(self):
+        ids = [t["game_id"] for t in self.provider.list_tasks("train")]
+        self.assertEqual(ids, [1, 2, 3])
+
+    def test_get_task_range_returns_actual_game_ids(self):
+        ids = [t["game_id"] for t in self.provider.get_task_range("train", stop=2)]
+        self.assertEqual(ids, [1, 2])
 
 
 if __name__ == "__main__":
