@@ -45,25 +45,6 @@ class FakeGameEnv:
         pass
 
 
-class Fake2PlayerGame:
-    """Stands in for gym_env in a two-player game: same reset/step interface as FakeGameEnv."""
-
-    def __init__(self):
-        self.reset_calls = []
-
-    def reset(self, seed=None, options=None):
-        self.reset_calls.append(dict(seed=seed, options=options))
-        return {"role": "user", "content": "start"}, {}
-
-    def step(self, action):
-        done = action == "stop"
-        observation = {"role": "user", "content": f"echo {action}"}
-        return observation, 1.0 if done else 0.0, done, False, {"turn_feedback": "feedback"}
-
-    def close(self):
-        pass
-
-
 def patch_game_env(game_instances=None):
     """Replaces game loading with FakeGameEnv and optionally injects fake game instances."""
     game_spec = MagicMock()
@@ -90,7 +71,7 @@ def patch_game_env(game_instances=None):
 
 
 def patch_2player_game_env():
-    """Replaces game loading with Fake2PlayerGame and mocks model loading."""
+    """Replaces game loading with FakeGameEnv and mocks model loading."""
     game_spec = MagicMock()
     game_spec.is_multi_player.return_value = True
     registry = MagicMock()
@@ -98,7 +79,7 @@ def patch_2player_game_env():
     created = []
 
     def make_fake_env(*args, **kwargs):
-        created.append(Fake2PlayerGame())
+        created.append(FakeGameEnv())
         return created[-1]
 
     instances_cls_mock = MagicMock()
@@ -266,6 +247,7 @@ class OpenEnvServerClientTestCase(unittest.TestCase):
             env.reset()
             state = env.state()
         self.assertEqual(state.game_name, "fake_game")
+        self.assertEqual(state.episode_count, 1)
 
 
 class TaskProviderServerTestCase(unittest.TestCase):
@@ -313,6 +295,31 @@ class TaskProviderServerTestCase(unittest.TestCase):
         self.assertEqual(task["game_id"], 1)
 
 
+def _run_two_concurrent_sessions(server):
+    """Asserts two clients can hold sessions simultaneously; returns (results, errors)."""
+    barrier = threading.Barrier(2)
+    results = {}
+    errors = []
+
+    def run_session(key):
+        try:
+            with server.client() as env:
+                env.reset()
+                barrier.wait(timeout=5)
+                result = env.step(ClemGameAction(response="hello"))
+                results[key] = result.observation.context["content"]
+        except Exception as e:
+            errors.append((key, e))
+
+    t1 = threading.Thread(target=run_session, args=("a",))
+    t2 = threading.Thread(target=run_session, args=("b",))
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+    return results, errors
+
+
 class ConcurrentSessionsTestCase(unittest.TestCase):
     """Proves that two 1-player sessions run simultaneously without blocking or corrupting each other."""
 
@@ -333,27 +340,7 @@ class ConcurrentSessionsTestCase(unittest.TestCase):
 
     def test_two_sessions_run_concurrently(self):
         """Two clients must hold sessions simultaneously (SUPPORTS_CONCURRENT_SESSIONS + max_concurrent_envs > 1)."""
-        barrier = threading.Barrier(2)
-        results = {}
-        errors = []
-
-        def run_session(key):
-            try:
-                with self.server.client() as env:
-                    env.reset()
-                    barrier.wait(timeout=5)
-                    result = env.step(ClemGameAction(response="hello"))
-                    results[key] = result.observation.context["content"]
-            except Exception as e:
-                errors.append((key, e))
-
-        t1 = threading.Thread(target=run_session, args=("a",))
-        t2 = threading.Thread(target=run_session, args=("b",))
-        t1.start()
-        t2.start()
-        t1.join(timeout=10)
-        t2.join(timeout=10)
-
+        results, errors = _run_two_concurrent_sessions(self.server)
         self.assertFalse(errors, f"Session errors: {errors}")
         self.assertEqual(results.get("a"), "echo hello")
         self.assertEqual(results.get("b"), "echo hello")
@@ -384,27 +371,7 @@ class Concurrent2PlayerSessionsTestCase(unittest.TestCase):
 
     def test_two_2player_sessions_run_concurrently(self):
         """Two clients in 2-player games must hold sessions simultaneously."""
-        barrier = threading.Barrier(2)
-        results = {}
-        errors = []
-
-        def run_session(key):
-            try:
-                with self.server.client() as env:
-                    env.reset()
-                    barrier.wait(timeout=5)
-                    result = env.step(ClemGameAction(response="hello"))
-                    results[key] = result.observation.context["content"]
-            except Exception as e:
-                errors.append((key, e))
-
-        t1 = threading.Thread(target=run_session, args=("a",))
-        t2 = threading.Thread(target=run_session, args=("b",))
-        t1.start()
-        t2.start()
-        t1.join(timeout=10)
-        t2.join(timeout=10)
-
+        results, errors = _run_two_concurrent_sessions(self.server)
         self.assertFalse(errors, f"Session errors: {errors}")
         self.assertEqual(results.get("a"), "echo hello")
         self.assertEqual(results.get("b"), "echo hello")
